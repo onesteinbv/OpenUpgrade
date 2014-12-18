@@ -1,10 +1,6 @@
 # -*- coding: utf-8 -*-
 ##############################################################################
 #
-# Odoo, a suite of business apps
-# This module Copyright (C) 2014 Therp BV (<http://therp.nl>).
-#    @author: Onestein <www.onestein.nl>
-#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
 # published by the Free Software Foundation, either version 3 of the
@@ -19,24 +15,10 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 ##############################################################################
-
-from openerp import SUPERUSER_ID as uid
-from openerp.modules.registry import RegistryManager
-from openerp.openupgrade import openupgrade, openupgrade_80
+from openerp.openupgrade import openupgrade
 
 
 @openupgrade.migrate()
 def migrate(cr, version):
-    pool = RegistryManager.get(cr.dbname)
-
-    openupgrade.map_values(
-        cr,
-        openupgrade.get_legacy_name('priority'),
-        'priority',
-        [('4', '0'), ('3', '0'), ('2', '1'), ('1', '2'), ('0', '2')],
-        table='project_issue', write='sql')
-
-    openupgrade_80.set_message_last_post(cr, uid, pool, ['project.issue'])
-
-    openupgrade.load_data(
-        cr, 'project_issue', 'migrations/8.0.1.0/noupdate_changes.xml')
+    # Drop view that inhibits changing field types. It will be recreated BTW
+    cr.execute('drop view if exists report_document_user cascade')

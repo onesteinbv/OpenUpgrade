@@ -25,6 +25,7 @@ column_renames = {
     'account_bank_statement_line': [
         ('analytic_account_id', None),
         ('type', None),
+        ('account_id', None),
     ]
 }
 
@@ -49,3 +50,9 @@ def migrate(cr, version):
             cr, 'account', 'exp', 'account.analytic.journal', res[0], True)
     openupgrade.rename_columns(cr, column_renames)
     openupgrade.rename_tables(cr, tables_renames)
+    # drop views that inhibit changing field types. They will be recreated
+    # anyways
+    for view in [
+            'analytic_entries_report', 'account_entries_report',
+            'report_invoice_created', 'report_aged_receivable']:
+        cr.execute('drop view if exists %s cascade' % view)

@@ -25,6 +25,7 @@ import logging
 from openerp import release, tools, SUPERUSER_ID
 from openerp.osv import orm
 from openerp.tools.mail import plaintext2html
+from openerp.modules.registry import RegistryManager
 import openupgrade_tools
 
 # The server log level has not been set at this point
@@ -59,6 +60,9 @@ __all__ = [
     'move_field_m2o',
     'map_values',
     'convert_field_to_html',
+    'map_values',
+    'deactivate_workflow_transitions',
+    'reactivate_workflow_transitions',
 ]
 
 
@@ -68,6 +72,8 @@ def check_values_selection_field(cr, table_name, field_name, allowed_values):
         has only the values 'allowed_values'.
         If not return False and log an error.
         If yes, return True.
+
+    .. versionadded:: 8.0
     """
     res = True
     cr.execute("SELECT %s, count(*) FROM %s GROUP BY %s;" %
@@ -198,6 +204,8 @@ def rename_xmlids(cr, xmlids_spec):
     One usage example is when an ID changes module. In OpenERP 6 for example,
     a number of res_groups IDs moved to module base from other modules (
     although they were still being defined in their respective module).
+
+    :param xmlids_spec: a list of tuples (old module.xmlid, new module.xmlid).
     """
     for (old, new) in xmlids_spec:
         if not old.split('.') or not new.split('.'):
@@ -322,7 +330,7 @@ def warn_possible_dataloss(cr, pool, old_module, fields):
             else:
                 # there is data loss after the migration.
                 message(
-                    cr, old_module,
+                    cr, old_module, None, None,
                     "Field '%s' was moved to module "
                     "'%s' which is not installed: "
                     "There were %s distinct values in this field.",
@@ -402,12 +410,17 @@ def set_defaults(cr, pool, default_spec, force=False):
 
 def logged_query(cr, query, args=None):
     """
-    Logs query and affected rows at level DEBUG
+    Logs query and affected rows at level DEBUG.
+
+    :param query: a query string suitable to pass to cursor.execute()
+    :param args: a list, tuple or dictionary passed as substitution values \
+to cursor.execute().
     """
     if args is None:
-        args = []
+        args = ()
+    args = tuple(args) if type(args) == list else args
     cr.execute(query, args)
-    logger.debug('Running %s', query % tuple(args))
+    logger.debug('Running %s', query % args)
     logger.debug('%s rows affected', cr.rowcount)
     return cr.rowcount
 
@@ -552,6 +565,11 @@ def map_values(
         if not model:
             logger.exception("map_values is called with no table and no model")
         table = model._table
+    if source_column == target_column:
+        logger.exception(
+            "map_values is called with the same value for source and old"
+            " columns : %s",
+            source_column)
     for old, new in mapping:
         values = {
             'table': table,
@@ -561,10 +579,13 @@ def map_values(
             'new': new,
         }
         if write == 'sql':
-            query = """UPDATE %(table)s SET %(target)s = '%(new)s' WHERE %(source)s = '%(old)s'""" % values
+            query = """UPDATE %(table)s
+                       SET %(target)s = %%(new)s
+                       WHERE %(source)s = %%(old)s""" % values
         else:
-            query = """SELECT id FROM %(table)s WHERE %(source)s = '%(old)s'""" % values
-        logged_query(cr, query)
+            query = """SELECT id FROM %(table)s
+                       WHERE %(source)s = %%(old)s""" % values
+        logged_query(cr, query, values)
         if write == 'orm':
             model.write(
                 cr, SUPERUSER_ID,
@@ -597,6 +618,67 @@ def message(cr, module, table, column,
     prefix = 'Module %s' + prefix
 
     logger.warn(prefix + message, *argslist, **kwargs)
+
+
+def deactivate_workflow_transitions(cr, model, transitions=None):
+    """
+    Disable workflow transitions for workflows on a given model.
+    This can be necessary for automatic workflow transitions when writing
+    to an object via the ORM in the post migration step.
+
+    Returns a dictionary to be used on reactivate_workflow_transitions
+
+    :param model: the model for which workflow transitions should be
+    deactivated
+    :param transitions: a list of ('module', 'name') xmlid tuples of
+    transitions to be deactivated. Don't pass this if there's no specific
+    reason to do so, the default is to deactivate all transitions
+
+    .. versionadded:: 7.0
+    """
+    transition_ids = []
+    if transitions:
+        data_obj = RegistryManager.get(cr.dbname)['ir.model.data']
+        for module, name in transitions:
+            try:
+                transition_ids.append(
+                    data_obj.get_object_reference(
+                        cr, SUPERUSER_ID, module, name)[1])
+            except ValueError:
+                continue
+    else:
+        cr.execute(
+            '''select distinct t.id
+            from wkf w
+            join wkf_activity a on a.wkf_id=w.id
+            join wkf_transition t
+                on t.act_from=a.id or t.act_to=a.id
+            where w.osv=%s''', (model,))
+        transition_ids = [i for i, in cr.fetchall()]
+    cr.execute(
+        'select id, condition from wkf_transition where id in %s',
+        (tuple(transition_ids),))
+    transition_conditions = dict(cr.fetchall())
+    cr.execute(
+        "update wkf_transition set condition = 'False' WHERE id in %s",
+        (tuple(transition_ids),))
+    return transition_conditions
+
+
+def reactivate_workflow_transitions(cr, transition_conditions):
+    """
+    Reactivate workflow transition previously deactivated by
+    deactivate_workflow_transitions.
+
+    :param transition_conditions: a dictionary returned by
+    deactivate_workflow_transitions
+
+    .. versionadded:: 7.0
+    """
+    for transition_id, condition in transition_conditions.iteritems():
+        cr.execute(
+            'update wkf_transition set condition = %s where id = %s',
+            (condition, transition_id))
 
 
 def migrate(no_version=False):

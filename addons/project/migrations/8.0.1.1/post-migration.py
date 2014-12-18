@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 ##############################################################################
 #
-#    OpenUpgrade module for Odoo
-#    @copyright 2014-Today: Odoo Community Association
-#    @author: Sylvain LE GAL <https://twitter.com/legalsylvain>
+#    Odoo, a suite of business apps
+#    This module Copyright (C) 2014 Therp BV (<http://therp.nl>).
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU Affero General Public License as
@@ -20,22 +19,30 @@
 #
 ##############################################################################
 
-from openerp.openupgrade import openupgrade
-from openerp.addons.openupgrade_records.lib import apriori
+from openerp.modules.registry import RegistryManager
+from openerp import SUPERUSER_ID as uid
+from openerp.openupgrade import openupgrade, openupgrade_80
 
 
 @openupgrade.migrate()
 def migrate(cr, version):
-    # Drop view that inhibits changing field types. It will be recreated BTW
-    cr.execute('drop view if exists report_document_user cascade')
+    registry = RegistryManager.get(cr.dbname)
 
-    openupgrade.update_module_names(
-        cr, apriori.renamed_modules.iteritems()
+    openupgrade.map_values(
+        cr,
+        openupgrade.get_legacy_name('priority'),
+        'priority',
+        [('4', '0'), ('3', '0'), ('2', '1'), ('1', '2'), ('0', '2')],
+        table='project_task', write='sql')
+
+    openupgrade_80.update_aliases(
+        cr, registry, 'project.project',
+        set_parent_thread_id=True,
+        defaults_id_key='project_id')
+
+    openupgrade_80.set_message_last_post(
+        cr, uid, registry, ['project.project', 'project.task']
     )
-    openupgrade.check_values_selection_field(
-        cr, 'ir_act_report_xml', 'report_type',
-        ['controller', 'pdf', 'qweb-html', 'qweb-pdf', 'sxw', 'webkit'])
-    openupgrade.check_values_selection_field(
-        cr, 'ir_ui_view', 'type', [
-            'calendar', 'diagram', 'form', 'gantt', 'graph', 'kanban',
-            'qweb', 'search', 'tree'])
+
+    openupgrade.load_data(
+        cr, 'project', 'migrations/8.0.1.1/noupdate_changes.xml')

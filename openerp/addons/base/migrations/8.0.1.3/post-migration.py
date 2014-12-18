@@ -43,25 +43,38 @@ def check_ir_actions_server_state(cr, pool):
                 ias.state, ias.id))
 
 
-def check_commercial_partner(cr, pool):
-    """ Test if the column is present (iow: if there exists a partner with a parent"""
-    if not openupgrade.column_exists(cr, "res_partner", "commercial_partner_id"):
-        sql = """ALTER TABLE res_partner ADD COLUMN commercial_partner_id int"""
-        cr.execute(sql)
-
-
 def remove_account_report_company_record(cr, pool):
-    """An ir_ui_view record from the discontinued module account_report_company is not removed and causes an
+    """An ir_ui_view record from the discontinued module """
+    """account_report_company is not removed and causes an
     AttributeError, remove it here to fix that error. """
-    view_obj = pool.get('ir.ui.view')
-    view_ids = view_obj.search(cr, SUPERUSER_ID,
-                               [('arch', 'like', '//templates//'), ('name', '=', 'res.partner kanban')])
-    view_obj.unlink(cr, SUPERUSER_ID, view_ids)
+    view_obj = pool['ir.ui.view']
+    try:
+        view_id = pool['ir.model.data'].get_object_reference(
+            cr, SUPERUSER_ID, 'account_report_company',
+            'account_report_copmany_partner_kanban_view')[1]
+        view_obj.unlink(cr, SUPERUSER_ID, [view_id])
+    except ValueError:
+        pass
+
+
+def ensure_admin_email(cr, pool):
+    """During migration, there are writes via the ORM to tracking
+    fields. This breaks if admin neither has a valid alias nor an email"""
+    admin = pool['res.users'].browse(cr, SUPERUSER_ID, SUPERUSER_ID)
+    if not admin.email and not pool['ir.config_parameter'].get_param(
+            cr, SUPERUSER_ID, 'mail.catchall.domain'):
+        # that's the default value for new installations
+        default_email = 'info@example.com'
+        openupgrade.message(
+            'base', None, None,
+            'No email address for admin and no catchall domain defined - '
+            'setting admin\'s email address to %s', default_email)
+        admin.write({'email': default_email})
 
 
 @openupgrade.migrate()
 def migrate(cr, version):
     pool = pooler.get_pool(cr.dbname)
     check_ir_actions_server_state(cr, pool)
-    check_commercial_partner(cr, pool)
     remove_account_report_company_record(cr, pool)
+    ensure_admin_email(cr, pool)
